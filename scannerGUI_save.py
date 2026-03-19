@@ -32,12 +32,27 @@ class DAQImageApp:
         
         ttk.Button(ctrl_frame, text="Connect", command=self.connect_serial).pack(pady=10)
         
+        ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=5)
+        
+        # --- Demo Controls Panel ---
+        demo_frame = ttk.LabelFrame(ctrl_frame, text="Demo Controls (No Data Acq.)")
+        demo_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(demo_frame, text="Scan X", command=lambda: self.send_command(b'X')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Scan Y", command=lambda: self.send_command(b'Y')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Scan X + Y", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Stop Demo", command=lambda: self.send_command(b'H')).pack(fill='x', pady=2, padx=5)
+
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
         
-        ttk.Button(ctrl_frame, text="1. Collect Data", command=self.collect_data).pack(pady=5)
-        ttk.Button(ctrl_frame, text="2. Transfer Data", command=self.transfer_data).pack(pady=5)
-        ttk.Button(ctrl_frame, text="3. Process & Display", command=self.process_and_display).pack(pady=5)
-        ttk.Button(ctrl_frame, text="4. Save Raw Data", command=self.save_raw_data).pack(pady=5)
+        # --- Data Acquisition Panel ---
+        daq_frame = ttk.LabelFrame(ctrl_frame, text="Data Acquisition")
+        daq_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(daq_frame, text="1. Collect Data", command=self.collect_data).pack(fill='x', pady=2, padx=5)
+        ttk.Button(daq_frame, text="2. Transfer Data", command=self.transfer_data).pack(fill='x', pady=2, padx=5)
+        ttk.Button(daq_frame, text="3. Process & Display", command=self.process_and_display).pack(fill='x', pady=2, padx=5)
+        ttk.Button(daq_frame, text="4. Save Raw Data", command=self.save_raw_data).pack(fill='x', pady=2, padx=5)
         
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
         ttk.Label(ctrl_frame, text="Phase Delays (Samples)").pack()
@@ -84,14 +99,20 @@ class DAQImageApp:
         except Exception as e:
             messagebox.showerror("Error", f"Could not connect: {e}")
 
+    def send_command(self, cmd):
+        """Helper to send short byte commands safely."""
+        if not self.serial_conn:
+            messagebox.showwarning("Warning", "Not connected to a serial port.")
+            return
+        self.serial_conn.write(cmd)
+        print(f"Sent command: {cmd.decode('utf-8')}")
+
     def collect_data(self):
-        if not self.serial_conn: return
-        self.serial_conn.write(b'C')
+        self.send_command(b'C')
         print("Data collection started on Arduino...")
 
     def transfer_data(self):
-        if not self.serial_conn: return
-        self.serial_conn.write(b'S')
+        self.send_command(b'S')
         
         # Read exact number of bytes
         raw_bytes = self.serial_conn.read(self.TOTAL_BYTES)

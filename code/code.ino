@@ -8,6 +8,9 @@ const int PIXELS = 128;
 const int DELAY_US = 200;
 const int TOTAL_PIXELS = PIXELS * PIXELS;
 
+// State Tracking
+char currentState = 'I'; // 'I' = Idle
+
 // Data buffer: 128 * 128 * 3 bytes = 49,152 bytes. 
 // The Arduino Due has 96KB of RAM, so this easily fits.
 uint8_t imageData[TOTAL_PIXELS][3];
@@ -27,50 +30,53 @@ void setup() {
 }
 
 void loop() {
+  // 1. Check for incoming commands
   if (Serial.available() > 0) {
     char cmd = Serial.read();
     
     if (cmd == 'C') {
+      currentState = 'I'; // Pause demo if running
       collectData();
     } 
     else if (cmd == 'S') {
+      currentState = 'I'; 
       transferData();
     }
+    else if (cmd == 'X' || cmd == 'Y' || cmd == 'B') {
+      currentState = cmd; // Enter a continuous demo state
+    }
+    else if (cmd == 'H') {
+      // Halt demo and return to center
+      currentState = 'I';
+      analogWrite(DAC_X, 2048);
+      analogWrite(DAC_Y, 2048);
+    }
   }
-analogWrite(DAC_X, 2048);
-analogWrite(DAC_X, 2048);
+
+  // 2. Execute active demo state (if any)
+  if (currentState == 'X') {
+    demoScanX();
+  } 
+  else if (currentState == 'Y') {
+    demoScanY();
+  } 
+  else if (currentState == 'B') {
+    demoScanXY();
+  }
 }
+
+// --- Data Acquisition Methods ---
 
 void collectData() {
   int pixelIndex = 0;
   
   for (int y = 0; y < PIXELS; y++) {
-    // Map 0-127 row to 0-4095 DAC voltage
     int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
     analogWrite(DAC_Y, dac_y_val);
     
-    // Calculate approximate Y voltage (assuming 3.3V logic)
-    float voltage_y = dac_y_val * (3.3 / 4095.0);
-    
     for (int x = 0; x < PIXELS; x++) {
-      // Map 0-127 column to 0-4095 DAC voltage
       int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
       analogWrite(DAC_X, dac_x_val);
-      
-      // Calculate approximate X voltage
-//      float voltage_x = dac_x_val * (3.3 / 4095.0);
-      
-//      // --- DEBUG SERIAL OUT ---
-//      Serial.print("Pixel (");
-//      Serial.print(x);
-//      Serial.print(",");
-//      Serial.print(y);
-//      Serial.print(") | X: ");
-//      Serial.print(voltage_x, 2); // Print with 2 decimal places
-//      Serial.print("V | Y: ");
-//      Serial.print(voltage_y, 2);
-//      Serial.println("V");
-//      // ------------------------
       
       // Settling time for galvo mirror
       delayMicroseconds(DELAY_US);
@@ -93,7 +99,47 @@ void collectData() {
 }
 
 void transferData() {
-  // Send the entire buffer as raw bytes
-  // 49,152 bytes at 2Mbps takes ~245 milliseconds
   Serial.write((uint8_t*)imageData, TOTAL_PIXELS * 3);
+}
+
+// --- Demo Methods (No Data Acquisition) ---
+
+void demoScanX() {
+  analogWrite(DAC_Y, 2048); // Keep Y centered
+  for (int x = 0; x < PIXELS; x++) {
+    if (Serial.available() > 0) return; // Exit immediately if a new command arrives
+    
+    int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
+    analogWrite(DAC_X, dac_x_val);
+    delayMicroseconds(DELAY_US);
+  }
+}
+
+void demoScanY() {
+  analogWrite(DAC_X, 2048); // Keep X centered
+  for (int y = 0; y < PIXELS; y++) {
+    if (Serial.available() > 0) return; // Exit immediately if a new command arrives
+    
+    int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
+    analogWrite(DAC_Y, dac_y_val);
+    // Y naturally sweeps slower than X in a raster, 
+    // so we scale the delay to make the mirror motion visible/safe.
+    delayMicroseconds(DELAY_US * PIXELS / 4); 
+  }
+}
+
+void demoScanXY() {
+  // Exact same raster motion as Collect, but without reading the ADC
+  for (int y = 0; y < PIXELS; y++) {
+    int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
+    analogWrite(DAC_Y, dac_y_val);
+    
+    for (int x = 0; x < PIXELS; x++) {
+      if (Serial.available() > 0) return; // Break inner loop if stopped
+      
+      int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
+      analogWrite(DAC_X, dac_x_val);
+      delayMicroseconds(DELAY_US);
+    }
+  }
 }
