@@ -124,7 +124,7 @@ void demoScanY() {
     analogWrite(DAC_Y, dac_y_val);
     // Y naturally sweeps slower than X in a raster, 
     // so we scale the delay to make the mirror motion visible/safe.
-    delayMicroseconds(DELAY_US * PIXELS / 4); 
+    delayMicroseconds(DELAY_US*2); 
   }
 }
 
@@ -139,7 +139,7 @@ void demoScanXY() {
       
       int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
       analogWrite(DAC_X, dac_x_val);
-      delayMicroseconds(DELAY_US);
+      delayMicroseconds(DELAY_US/10);
     }
   }
 }
