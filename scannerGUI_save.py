@@ -10,6 +10,15 @@ class DAQImageApp:
         self.root = root
         self.root.title("Scanning Image DAQ - 128x128")
         
+        # Set a comfortable default size and a minimum size to prevent squishing
+        self.root.geometry("1100x750")
+        self.root.minsize(850, 650)
+        
+        # Fullscreen toggles
+        self.is_fullscreen = False
+        self.root.bind("<F11>", self.toggle_fullscreen)
+        self.root.bind("<Escape>", self.exit_fullscreen)
+        
         # Data storage
         self.raw_x, self.raw_y, self.raw_z = None, None, None
         self.serial_conn = None
@@ -21,16 +30,22 @@ class DAQImageApp:
         self.setup_ui()
 
     def setup_ui(self):
-        # --- Control Panel ---
-        ctrl_frame = ttk.Frame(self.root, padding=10)
-        ctrl_frame.pack(side=tk.LEFT, fill=tk.Y)
+        # --- Main Layout (Resizable Panes) ---
+        # PanedWindow allows the user to drag the border between controls and image
+        self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # --- Control Panel (Left Pane) ---
+        ctrl_frame = ttk.Frame(self.main_pane, padding=10)
+        # weight=0 means the control panel won't infinitely expand when window maximizes
+        self.main_pane.add(ctrl_frame, weight=0) 
         
         ttk.Label(ctrl_frame, text="COM Port (e.g., COM3 or /dev/ttyACM0):").pack(pady=5)
         self.port_entry = ttk.Entry(ctrl_frame)
-        self.port_entry.pack(pady=5)
+        self.port_entry.pack(fill='x', pady=5)
         self.port_entry.insert(0, "/dev/ttyACM0")
         
-        ttk.Button(ctrl_frame, text="Connect", command=self.connect_serial).pack(pady=10)
+        ttk.Button(ctrl_frame, text="Connect", command=self.connect_serial).pack(fill='x', pady=10)
         
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=5)
         
@@ -55,41 +70,60 @@ class DAQImageApp:
         ttk.Button(daq_frame, text="4. Save Raw Data", command=self.save_raw_data).pack(fill='x', pady=2, padx=5)
         
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
-        ttk.Label(ctrl_frame, text="Phase Delays (Samples)").pack()
+        
+        # --- Image Adjustments & Phase Delays Panel ---
+        adj_frame = ttk.LabelFrame(ctrl_frame, text="Image Adjustments")
+        adj_frame.pack(fill='x', pady=5)
         
         self.phase_x = tk.IntVar(value=0)
         self.phase_y = tk.IntVar(value=0)
         self.phase_z = tk.IntVar(value=0)
         
-        self.create_slider(ctrl_frame, "Phase X:", self.phase_x, 0, 1000)
-        self.create_slider(ctrl_frame, "Phase Y:", self.phase_y, 0, 1000)
-        self.create_slider(ctrl_frame, "Phase Z:", self.phase_z, 0, 1000)
+        self.create_slider(adj_frame, "Phase X:", self.phase_x, -500, 500)
+        self.create_slider(adj_frame, "Phase Y:", self.phase_y, -500, 500)
+        self.create_slider(adj_frame, "Phase Z:", self.phase_z, -500, 500)
         
-        ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
-        ttk.Label(ctrl_frame, text="Image Adjustments").pack()
+        ttk.Separator(adj_frame, orient='horizontal').pack(fill='x', pady=10, padx=5)
         
         self.contrast = tk.DoubleVar(value=1.0)
         self.brightness = tk.DoubleVar(value=0.0)
         
-        self.create_slider(ctrl_frame, "Contrast:", self.contrast, 0.1, 5.0, resolution=0.1)
-        self.create_slider(ctrl_frame, "Brightness:", self.brightness, -128, 128)
+        self.create_slider(adj_frame, "Contrast:", self.contrast, 0.1, 5.0, resolution=0.1)
+        self.create_slider(adj_frame, "Brightness:", self.brightness, -128, 128)
+        
+        ttk.Label(ctrl_frame, text="Press F11 for Fullscreen", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.BOTTOM, pady=10)
 
-        # --- Image Display Panel ---
-        self.fig, self.ax = plt.subplots(figsize=(6, 6))
+        # --- Image Display Panel (Right Pane) ---
+        img_frame = ttk.Frame(self.main_pane)
+        # weight=1 ensures this pane grabs all the extra space when the window is resized/maximized
+        self.main_pane.add(img_frame, weight=1) 
+        
+        # layout='constrained' forces Matplotlib to smoothly resize its contents to the Tkinter frame
+        self.fig, self.ax = plt.subplots(figsize=(6, 6), layout='constrained')
         self.ax.set_title("128x128 Reconstructed Image")
         self.ax.axis('off')
         
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
-        self.canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=img_frame)
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def create_slider(self, parent, label_text, variable, vmin, vmax, resolution=1):
         frame = ttk.Frame(parent)
-        frame.pack(fill='x', pady=2)
-        ttk.Label(frame, text=label_text, width=12).pack(side=tk.LEFT)
+        frame.pack(fill='x', pady=2, padx=5)
+        ttk.Label(frame, text=label_text, width=10).pack(side=tk.LEFT)
         scale = tk.Scale(frame, variable=variable, from_=vmin, to=vmax, 
                          resolution=resolution, orient=tk.HORIZONTAL, 
                          command=lambda e: self.process_and_display())
         scale.pack(side=tk.RIGHT, fill='x', expand=True)
+
+    def toggle_fullscreen(self, event=None):
+        self.is_fullscreen = not self.is_fullscreen
+        self.root.attributes("-fullscreen", self.is_fullscreen)
+        return "break"
+
+    def exit_fullscreen(self, event=None):
+        self.is_fullscreen = False
+        self.root.attributes("-fullscreen", False)
+        return "break"
 
     def connect_serial(self):
         port = self.port_entry.get()
@@ -134,6 +168,11 @@ class DAQImageApp:
         if self.raw_x is None: return
 
         px, py, pz = self.phase_x.get(), self.phase_y.get(), self.phase_z.get()
+        
+        # Normalize relative phases so the minimum is always 0.
+        min_p = min(px, py, pz)
+        px, py, pz = px - min_p, py - min_p, pz - min_p
+        
         max_p = max(px, py, pz)
         
         start_x, start_y, start_z = max_p - px, max_p - py, max_p - pz
