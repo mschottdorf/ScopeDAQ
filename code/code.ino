@@ -139,7 +139,7 @@ void demoScanXY() {
       
       int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
       analogWrite(DAC_X, dac_x_val);
-      delayMicroseconds(DELAY_US/10);
+      delayMicroseconds(DELAY_US);
     }
   }
 }
