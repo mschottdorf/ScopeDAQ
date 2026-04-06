@@ -10,14 +10,12 @@ const int TOTAL_PIXELS = PIXELS * PIXELS;
 
 // State Tracking
 char currentState = 'I'; // 'I' = Idle
+int zoomPercent = 100;   // 1 to 100% scale for amplitude
 
 // Data buffer: 128 * 128 * 3 bytes = 49,152 bytes. 
-// The Arduino Due has 96KB of RAM, so this easily fits.
 uint8_t imageData[TOTAL_PIXELS][3];
 
 void setup() {
-  // Use the highest native baud rate for the programming port, 
-  // or use 'SerialUSB' if using the Native USB port.
   Serial.begin(115200); 
   
   // Set ADC and DAC to 12-bit resolution (0-4095)
@@ -29,31 +27,42 @@ void setup() {
   analogWrite(DAC_Y, 2048);
 }
 
+// Helper function to calculate scaled DAC value around the center (2048)
+int getDacVal(int idx) {
+  long raw = map(idx, 0, PIXELS - 1, 0, 4095);
+  return 2048 + ((raw - 2048) * zoomPercent) / 100;
+}
+
 void loop() {
   // 1. Check for incoming commands
   if (Serial.available() > 0) {
     char cmd = Serial.read();
     
     if (cmd == 'C') {
-      currentState = 'I'; // Pause demo if running
+      currentState = 'I'; 
       collectData();
     } 
     else if (cmd == 'S') {
       currentState = 'I'; 
       transferData();
     }
-    else if (cmd == 'X' || cmd == 'Y' || cmd == 'B') {
-      currentState = cmd; // Enter a continuous demo state
+    else if (cmd == 'X' || cmd == 'Y' || cmd == 'B' || cmd == 'L') {
+      currentState = cmd; // Enter continuous state (Demo or Live)
+    }
+    else if (cmd == 'Z') {
+      // Wait for the next byte which contains the zoom level
+      while (Serial.available() == 0) {} 
+      zoomPercent = Serial.read();
     }
     else if (cmd == 'H') {
-      // Halt demo and return to center
+      // Halt and return to center
       currentState = 'I';
       analogWrite(DAC_X, 2048);
       analogWrite(DAC_Y, 2048);
     }
   }
 
-  // 2. Execute active demo state (if any)
+  // 2. Execute active state
   if (currentState == 'X') {
     demoScanX();
   } 
@@ -63,6 +72,9 @@ void loop() {
   else if (currentState == 'B') {
     demoScanXY();
   }
+  else if (currentState == 'L') {
+    liveScan();
+  }
 }
 
 // --- Data Acquisition Methods ---
@@ -71,20 +83,14 @@ void collectData() {
   int pixelIndex = 0;
   
   for (int y = 0; y < PIXELS; y++) {
-    int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
-    analogWrite(DAC_Y, dac_y_val);
+    analogWrite(DAC_Y, getDacVal(y));
     
     for (int x = 0; x < PIXELS; x++) {
-      int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
-      analogWrite(DAC_X, dac_x_val);
-      
-      // Settling time for galvo mirror
+      analogWrite(DAC_X, getDacVal(x));
       delayMicroseconds(DELAY_US);
       
-      // Read intensity
       int z_val = analogRead(ADC_Z);
       
-      // Store in buffer
       imageData[pixelIndex][0] = (uint8_t)x;
       imageData[pixelIndex][1] = (uint8_t)y;
       imageData[pixelIndex][2] = (uint8_t)(z_val >> 4); 
@@ -93,7 +99,6 @@ void collectData() {
     }
   }
   
-  // Return to origin safely after scan
   analogWrite(DAC_X, 2048);
   analogWrite(DAC_Y, 2048);
 }
@@ -102,43 +107,58 @@ void transferData() {
   Serial.write((uint8_t*)imageData, TOTAL_PIXELS * 3);
 }
 
+// --- Live Stream Method ---
+
+void liveScan() {
+  // Transmit row-by-row to optimize USB overhead
+  for (int y = 0; y < PIXELS; y++) {
+    analogWrite(DAC_Y, getDacVal(y));
+    uint8_t rowBuf[PIXELS * 3];
+    int idx = 0;
+    
+    for (int x = 0; x < PIXELS; x++) {
+      if (Serial.available() > 0) return; // Exit to handle new commands (Stop or Zoom)
+      
+      analogWrite(DAC_X, getDacVal(x));
+      delayMicroseconds(DELAY_US);
+      int z_val = analogRead(ADC_Z);
+      
+      rowBuf[idx++] = (uint8_t)x;
+      rowBuf[idx++] = (uint8_t)y;
+      rowBuf[idx++] = (uint8_t)(z_val >> 4);
+    }
+    
+    // Blast the entire row over serial
+    Serial.write(rowBuf, PIXELS * 3);
+  }
+}
+
 // --- Demo Methods (No Data Acquisition) ---
 
 void demoScanX() {
-  analogWrite(DAC_Y, 2048); // Keep Y centered
+  analogWrite(DAC_Y, 2048); 
   for (int x = 0; x < PIXELS; x++) {
-    if (Serial.available() > 0) return; // Exit immediately if a new command arrives
-    
-    int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
-    analogWrite(DAC_X, dac_x_val);
+    if (Serial.available() > 0) return; 
+    analogWrite(DAC_X, getDacVal(x));
     delayMicroseconds(DELAY_US);
   }
 }
 
 void demoScanY() {
-  analogWrite(DAC_X, 2048); // Keep X centered
+  analogWrite(DAC_X, 2048); 
   for (int y = 0; y < PIXELS; y++) {
-    if (Serial.available() > 0) return; // Exit immediately if a new command arrives
-    
-    int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
-    analogWrite(DAC_Y, dac_y_val);
-    // Y naturally sweeps slower than X in a raster, 
-    // so we scale the delay to make the mirror motion visible/safe.
-    delayMicroseconds(DELAY_US*2); 
+    if (Serial.available() > 0) return; 
+    analogWrite(DAC_Y, getDacVal(y));
+    delayMicroseconds(DELAY_US * 2); 
   }
 }
 
 void demoScanXY() {
-  // Exact same raster motion as Collect, but without reading the ADC
   for (int y = 0; y < PIXELS; y++) {
-    int dac_y_val = map(y, 0, PIXELS - 1, 0, 4095);
-    analogWrite(DAC_Y, dac_y_val);
-    
+    analogWrite(DAC_Y, getDacVal(y));
     for (int x = 0; x < PIXELS; x++) {
-      if (Serial.available() > 0) return; // Break inner loop if stopped
-      
-      int dac_x_val = map(x, 0, PIXELS - 1, 0, 4095);
-      analogWrite(DAC_X, dac_x_val);
+      if (Serial.available() > 0) return; 
+      analogWrite(DAC_X, getDacVal(x));
       delayMicroseconds(DELAY_US);
     }
   }
