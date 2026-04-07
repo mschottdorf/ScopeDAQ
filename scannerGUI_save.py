@@ -8,7 +8,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 class DAQImageApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanning Image DAQ - 128x128")
+        self.root.title("Manuels scanning laser microscope demo")
         self.root.geometry("1100x750")
         self.root.minsize(850, 650)
         
@@ -21,11 +21,15 @@ class DAQImageApp:
         self.serial_conn = None
         self.is_live = False
         
-        # Core Image Array
+        # Core Image Array Constants
         self.PIXELS = 128
-        self.TOTAL_BYTES = self.PIXELS * self.PIXELS * 3 
+        self.TOTAL_PIXELS = self.PIXELS * self.PIXELS
+        self.TOTAL_BYTES = self.TOTAL_PIXELS * 3 # Used for static frame transfer
+        
+        # High-Speed Live Variables
         self.current_img = np.zeros((self.PIXELS, self.PIXELS))
-        self.im_obj = None # Matplotlib image object for fast updates
+        self.im_obj = None 
+        self.live_ptr = 0 # Pointer to track 1D position in the continuous stream
         
         self.setup_ui()
 
@@ -36,7 +40,7 @@ class DAQImageApp:
         ctrl_frame = ttk.Frame(self.main_pane, padding=10)
         self.main_pane.add(ctrl_frame, weight=0) 
         
-        ttk.Label(ctrl_frame, text="COM Port:").pack(pady=5)
+        ttk.Label(ctrl_frame, text="COM Port (Check Device Manager for Native USB):").pack(pady=5)
         self.port_entry = ttk.Entry(ctrl_frame)
         self.port_entry.pack(fill='x', pady=5)
         self.port_entry.insert(0, "/dev/ttyACM0")
@@ -94,7 +98,7 @@ class DAQImageApp:
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=img_frame)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.update_image_plot() # Initialize blank plot
+        self.update_image_plot()
 
     def create_slider(self, parent, label_text, variable, vmin, vmax, resolution=1, command=None):
         frame = ttk.Frame(parent)
@@ -120,7 +124,6 @@ class DAQImageApp:
         try:
             self.serial_conn = serial.Serial(port, baudrate=115200, timeout=5)
             self.serial_conn.reset_input_buffer()
-            # Send initial zoom parameter
             self.update_zoom()
             messagebox.showinfo("Success", f"Connected to {port}")
         except Exception as e:
@@ -133,7 +136,6 @@ class DAQImageApp:
         self.serial_conn.write(cmd)
         
     def update_zoom(self):
-        """Sends the Z byte followed by the zoom value byte."""
         if self.serial_conn:
             val = int(self.zoom.get())
             self.serial_conn.write(b'Z' + bytes([val]))
@@ -147,34 +149,53 @@ class DAQImageApp:
             self.is_live = True
             self.live_btn.config(text="⏹ Stop Live View")
             self.current_img = np.zeros((self.PIXELS, self.PIXELS))
+            self.live_ptr = 0 # Reset continuous stream pointer
             self.serial_conn.reset_input_buffer()
             self.send_command(b'L')
             self.poll_live_data()
         else:
             self.is_live = False
             self.live_btn.config(text="▶ Start Live View")
-            self.send_command(b'H') # Stop live scan
+            self.send_command(b'H')
 
     def poll_live_data(self):
         if not self.is_live: return
         
         try:
             bytes_waiting = self.serial_conn.in_waiting
-            # Only read blocks of 3 bytes (X, Y, Z)
-            bytes_to_read = bytes_waiting - (bytes_waiting % 3) 
-            
-            if bytes_to_read > 0:
-                raw_data = self.serial_conn.read(bytes_to_read)
-                data_matrix = np.frombuffer(raw_data, dtype=np.uint8).reshape(-1, 3)
+            if bytes_waiting > 0:
+                raw_data = self.serial_conn.read(bytes_waiting)
+                data_array = np.frombuffer(raw_data, dtype=np.uint8)
+                n_bytes = len(data_array)
                 
-                # Instantly map incoming data to their respective XY coordinates
-                self.current_img[data_matrix[:, 1], data_matrix[:, 0]] = data_matrix[:, 2]
+                # Flatten image for 1D high-speed injection
+                flat_img = self.current_img.ravel()
+                
+                # Slicing logic to handle wraparound perfectly
+                if self.live_ptr + n_bytes > self.TOTAL_PIXELS:
+                    space_left = self.TOTAL_PIXELS - self.live_ptr
+                    flat_img[self.live_ptr:] = data_array[:space_left]
+                    
+                    remaining = n_bytes - space_left
+                    if remaining >= self.TOTAL_PIXELS:
+                        # Safety net if the buffer gets severely backed up
+                        data_array = data_array[-self.TOTAL_PIXELS:]
+                        remaining = self.TOTAL_PIXELS
+                        
+                    flat_img[:remaining] = data_array[-remaining:]
+                    self.live_ptr = remaining
+                else:
+                    flat_img[self.live_ptr : self.live_ptr + n_bytes] = data_array
+                    self.live_ptr += n_bytes
+                
+                # Snap back to 2D
+                self.current_img = flat_img.reshape((self.PIXELS, self.PIXELS))
                 self.update_image_plot()
                 
         except Exception as e:
             print(f"Serial read error: {e}")
 
-        # Poll again in 30ms for smooth UI performance
+        # Re-poll every 30ms 
         self.root.after(30, self.poll_live_data)
 
     def collect_data(self):
@@ -198,7 +219,6 @@ class DAQImageApp:
         self.raw_y = data_matrix[:, 1]
         self.raw_z = data_matrix[:, 2]
         
-        # Populate the image matrix
         self.current_img = np.zeros((self.PIXELS, self.PIXELS))
         x_idx = np.clip(self.raw_x, 0, self.PIXELS - 1)
         y_idx = np.clip(self.raw_y, 0, self.PIXELS - 1)
@@ -208,20 +228,17 @@ class DAQImageApp:
         self.update_image_plot()
 
     def update_image_plot(self):
-        """Applies brightness/contrast and visually updates the canvas without heavy math."""
         c, b = self.contrast.get(), self.brightness.get()
         img_final = c * (self.current_img - 128) + 128 + b
         img_final = np.clip(img_final, 0, 255).astype(np.uint8)
 
         if self.im_obj is None:
-            # First time draw
             self.ax.clear()
             self.ax.set_title(f"{self.PIXELS}x{self.PIXELS} DAQ Image")
             self.ax.axis('off')
             self.im_obj = self.ax.imshow(img_final, cmap='gray', vmin=0, vmax=255, origin='lower')
             self.canvas.draw()
         else:
-            # Fast redraw (doesn't rebuild axes)
             self.im_obj.set_data(img_final)
             self.canvas.draw_idle() 
 

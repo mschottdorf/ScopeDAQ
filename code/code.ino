@@ -5,7 +5,7 @@ const int ADC_Z = A0;   // Photosensor input
 
 // Scanning parameters
 const int PIXELS = 128;
-const int DELAY_US = 200;
+const int DELAY_US = 200; // Lowered from 200us to maximize Native USB framerate
 const int TOTAL_PIXELS = PIXELS * PIXELS;
 
 // State Tracking
@@ -16,13 +16,15 @@ int zoomPercent = 100;   // 1 to 100% scale for amplitude
 uint8_t imageData[TOTAL_PIXELS][3];
 
 void setup() {
-  Serial.begin(115200); 
+  // Use Native USB port for maximum throughput. 
+  // Baud rate integer is technically ignored by the USB CDC driver (runs at max speed).
+  SerialUSB.begin(115200); 
   
   // Set ADC and DAC to 12-bit resolution (0-4095)
   analogReadResolution(12);
   analogWriteResolution(12);
   
-  // Initialize mirrors to 0 position
+  // Initialize mirrors to center position
   analogWrite(DAC_X, 2048);
   analogWrite(DAC_Y, 2048);
 }
@@ -34,9 +36,9 @@ int getDacVal(int idx) {
 }
 
 void loop() {
-  // 1. Check for incoming commands
-  if (Serial.available() > 0) {
-    char cmd = Serial.read();
+  // 1. Check for incoming commands over Native USB
+  if (SerialUSB.available() > 0) {
+    char cmd = SerialUSB.read();
     
     if (cmd == 'C') {
       currentState = 'I'; 
@@ -51,8 +53,8 @@ void loop() {
     }
     else if (cmd == 'Z') {
       // Wait for the next byte which contains the zoom level
-      while (Serial.available() == 0) {} 
-      zoomPercent = Serial.read();
+      while (SerialUSB.available() == 0) {} 
+      zoomPercent = SerialUSB.read();
     }
     else if (cmd == 'H') {
       // Halt and return to center
@@ -91,6 +93,7 @@ void collectData() {
       
       int z_val = analogRead(ADC_Z);
       
+      // Full frame collection keeps X, Y, and Z for detailed saving later
       imageData[pixelIndex][0] = (uint8_t)x;
       imageData[pixelIndex][1] = (uint8_t)y;
       imageData[pixelIndex][2] = (uint8_t)(z_val >> 4); 
@@ -104,32 +107,31 @@ void collectData() {
 }
 
 void transferData() {
-  Serial.write((uint8_t*)imageData, TOTAL_PIXELS * 3);
+  SerialUSB.write((uint8_t*)imageData, TOTAL_PIXELS * 3);
 }
 
-// --- Live Stream Method ---
+// --- Live Stream Method (Optimized) ---
 
 void liveScan() {
-  // Transmit row-by-row to optimize USB overhead
+  // Transmit row-by-row, sending ONLY the Z values (Data Stripping)
   for (int y = 0; y < PIXELS; y++) {
     analogWrite(DAC_Y, getDacVal(y));
-    uint8_t rowBuf[PIXELS * 3];
-    int idx = 0;
+    
+    // Only 128 bytes needed now!
+    uint8_t rowBuf[PIXELS]; 
     
     for (int x = 0; x < PIXELS; x++) {
-      if (Serial.available() > 0) return; // Exit to handle new commands (Stop or Zoom)
+      if (SerialUSB.available() > 0) return; // Exit to handle new commands
       
       analogWrite(DAC_X, getDacVal(x));
       delayMicroseconds(DELAY_US);
       int z_val = analogRead(ADC_Z);
       
-      rowBuf[idx++] = (uint8_t)x;
-      rowBuf[idx++] = (uint8_t)y;
-      rowBuf[idx++] = (uint8_t)(z_val >> 4);
+      rowBuf[x] = (uint8_t)(z_val >> 4); // Store only the intensity
     }
     
-    // Blast the entire row over serial
-    Serial.write(rowBuf, PIXELS * 3);
+    // Blast just the 128 brightness values over Native USB
+    SerialUSB.write(rowBuf, PIXELS); 
   }
 }
 
@@ -138,7 +140,7 @@ void liveScan() {
 void demoScanX() {
   analogWrite(DAC_Y, 2048); 
   for (int x = 0; x < PIXELS; x++) {
-    if (Serial.available() > 0) return; 
+    if (SerialUSB.available() > 0) return; 
     analogWrite(DAC_X, getDacVal(x));
     delayMicroseconds(DELAY_US);
   }
@@ -147,7 +149,7 @@ void demoScanX() {
 void demoScanY() {
   analogWrite(DAC_X, 2048); 
   for (int y = 0; y < PIXELS; y++) {
-    if (Serial.available() > 0) return; 
+    if (SerialUSB.available() > 0) return; 
     analogWrite(DAC_Y, getDacVal(y));
     delayMicroseconds(DELAY_US * 2); 
   }
@@ -157,7 +159,7 @@ void demoScanXY() {
   for (int y = 0; y < PIXELS; y++) {
     analogWrite(DAC_Y, getDacVal(y));
     for (int x = 0; x < PIXELS; x++) {
-      if (Serial.available() > 0) return; 
+      if (SerialUSB.available() > 0) return; 
       analogWrite(DAC_X, getDacVal(x));
       delayMicroseconds(DELAY_US);
     }
