@@ -1,11 +1,12 @@
-// Pin definitions
+// Pin definitions - check with custom shield.
 const int DAC_X = DAC0; // Fast axis
 const int DAC_Y = DAC1; // Slow axis
 const int ADC_Z = A0;   // Photosensor input
 
 // Scanning parameters
 const int PIXELS = 128;
-const int DELAY_US = 200; // Lowered from 200us to maximize Native USB framerate
+const int FAST_PIXELS = 50; // High-speed, for Oscilloscope in TV mode. Analog read via scope.
+const int DELAY_US = 20; 
 const int TOTAL_PIXELS = PIXELS * PIXELS;
 
 // State Tracking
@@ -16,8 +17,6 @@ int zoomPercent = 100;   // 1 to 100% scale for amplitude
 uint8_t imageData[TOTAL_PIXELS][3];
 
 void setup() {
-  // Use Native USB port for maximum throughput. 
-  // Baud rate integer is technically ignored by the USB CDC driver (runs at max speed).
   SerialUSB.begin(115200); 
   
   // Set ADC and DAC to 12-bit resolution (0-4095)
@@ -30,8 +29,8 @@ void setup() {
 }
 
 // Helper function to calculate scaled DAC value around the center (2048)
-int getDacVal(int idx) {
-  long raw = map(idx, 0, PIXELS - 1, 0, 4095);
+int getDacVal(int idx, int max_pixels) {
+  long raw = map(idx, 0, max_pixels - 1, 0, 4095);
   return 2048 + ((raw - 2048) * zoomPercent) / 100;
 }
 
@@ -48,8 +47,8 @@ void loop() {
       currentState = 'I'; 
       transferData();
     }
-    else if (cmd == 'X' || cmd == 'Y' || cmd == 'B' || cmd == 'L') {
-      currentState = cmd; // Enter continuous state (Demo or Live)
+    else if (cmd == 'X' || cmd == 'Y' || cmd == 'B' || cmd == 'L' || cmd == 'F') {
+      currentState = cmd; // Enter continuous state
     }
     else if (cmd == 'Z') {
       // Wait for the next byte which contains the zoom level
@@ -74,6 +73,9 @@ void loop() {
   else if (currentState == 'B') {
     demoScanXY();
   }
+  else if (currentState == 'F') {
+    demoFastScanXY();
+  }
   else if (currentState == 'L') {
     liveScan();
   }
@@ -85,15 +87,14 @@ void collectData() {
   int pixelIndex = 0;
   
   for (int y = 0; y < PIXELS; y++) {
-    analogWrite(DAC_Y, getDacVal(y));
+    analogWrite(DAC_Y, getDacVal(y, PIXELS));
     
     for (int x = 0; x < PIXELS; x++) {
-      analogWrite(DAC_X, getDacVal(x));
+      analogWrite(DAC_X, getDacVal(x, PIXELS));
       delayMicroseconds(DELAY_US);
       
       int z_val = analogRead(ADC_Z);
       
-      // Full frame collection keeps X, Y, and Z for detailed saving later
       imageData[pixelIndex][0] = (uint8_t)x;
       imageData[pixelIndex][1] = (uint8_t)y;
       imageData[pixelIndex][2] = (uint8_t)(z_val >> 4); 
@@ -110,27 +111,22 @@ void transferData() {
   SerialUSB.write((uint8_t*)imageData, TOTAL_PIXELS * 3);
 }
 
-// --- Live Stream Method (Optimized) ---
+// --- Live Stream Method ---
 
 void liveScan() {
-  // Transmit row-by-row, sending ONLY the Z values (Data Stripping)
   for (int y = 0; y < PIXELS; y++) {
-    analogWrite(DAC_Y, getDacVal(y));
-    
-    // Only 128 bytes needed now!
+    analogWrite(DAC_Y, getDacVal(y, PIXELS));
     uint8_t rowBuf[PIXELS]; 
     
     for (int x = 0; x < PIXELS; x++) {
-      if (SerialUSB.available() > 0) return; // Exit to handle new commands
+      if (SerialUSB.available() > 0) return; 
       
-      analogWrite(DAC_X, getDacVal(x));
+      analogWrite(DAC_X, getDacVal(x, PIXELS));
       delayMicroseconds(DELAY_US);
       int z_val = analogRead(ADC_Z);
       
-      rowBuf[x] = (uint8_t)(z_val >> 4); // Store only the intensity
+      rowBuf[x] = (uint8_t)(z_val >> 4); 
     }
-    
-    // Blast just the 128 brightness values over Native USB
     SerialUSB.write(rowBuf, PIXELS); 
   }
 }
@@ -141,7 +137,7 @@ void demoScanX() {
   analogWrite(DAC_Y, 2048); 
   for (int x = 0; x < PIXELS; x++) {
     if (SerialUSB.available() > 0) return; 
-    analogWrite(DAC_X, getDacVal(x));
+    analogWrite(DAC_X, getDacVal(x, PIXELS));
     delayMicroseconds(DELAY_US);
   }
 }
@@ -150,18 +146,30 @@ void demoScanY() {
   analogWrite(DAC_X, 2048); 
   for (int y = 0; y < PIXELS; y++) {
     if (SerialUSB.available() > 0) return; 
-    analogWrite(DAC_Y, getDacVal(y));
+    analogWrite(DAC_Y, getDacVal(y, PIXELS));
     delayMicroseconds(DELAY_US * 2); 
   }
 }
 
 void demoScanXY() {
   for (int y = 0; y < PIXELS; y++) {
-    analogWrite(DAC_Y, getDacVal(y));
+    analogWrite(DAC_Y, getDacVal(y, PIXELS));
     for (int x = 0; x < PIXELS; x++) {
       if (SerialUSB.available() > 0) return; 
-      analogWrite(DAC_X, getDacVal(x));
+      analogWrite(DAC_X, getDacVal(x, PIXELS));
       delayMicroseconds(DELAY_US);
+    }
+  }
+}
+
+// High-Speed 50x50 Scan for oscilloscope. Minimum delay
+void demoFastScanXY() {
+  for (int y = 0; y < FAST_PIXELS; y++) {
+    analogWrite(DAC_Y, getDacVal(y, FAST_PIXELS)); // Stretch 50 pixels across FOV
+    for (int x = 0; x < FAST_PIXELS; x++) {
+      if (SerialUSB.available() > 0) return; 
+      analogWrite(DAC_X, getDacVal(x, FAST_PIXELS));
+      delayMicroseconds(10);
     }
   }
 }

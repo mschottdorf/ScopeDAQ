@@ -24,12 +24,12 @@ class DAQImageApp:
         # Core Image Array Constants
         self.PIXELS = 128
         self.TOTAL_PIXELS = self.PIXELS * self.PIXELS
-        self.TOTAL_BYTES = self.TOTAL_PIXELS * 3 # Used for static frame transfer
+        self.TOTAL_BYTES = self.TOTAL_PIXELS * 3 
         
         # High-Speed Live Variables
         self.current_img = np.zeros((self.PIXELS, self.PIXELS))
         self.im_obj = None 
-        self.live_ptr = 0 # Pointer to track 1D position in the continuous stream
+        self.live_ptr = 0 
         
         self.setup_ui()
 
@@ -40,7 +40,7 @@ class DAQImageApp:
         ctrl_frame = ttk.Frame(self.main_pane, padding=10)
         self.main_pane.add(ctrl_frame, weight=0) 
         
-        ttk.Label(ctrl_frame, text="COM Port (Check Device Manager for Native USB):").pack(pady=5)
+        ttk.Label(ctrl_frame, text="COM Port:").pack(pady=5)
         self.port_entry = ttk.Entry(ctrl_frame)
         self.port_entry.pack(fill='x', pady=5)
         self.port_entry.insert(0, "/dev/ttyACM0")
@@ -53,7 +53,8 @@ class DAQImageApp:
         demo_frame.pack(fill='x', pady=5)
         ttk.Button(demo_frame, text="Scan X", command=lambda: self.send_command(b'X')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Scan Y", command=lambda: self.send_command(b'Y')).pack(fill='x', pady=2, padx=5)
-        ttk.Button(demo_frame, text="Scan X + Y", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Scan X + Y (128x128)", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Fast Scan X+Y (50x50)", command=lambda: self.send_command(b'F')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Stop Motion", command=lambda: self.send_command(b'H')).pack(fill='x', pady=2, padx=5)
 
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
@@ -149,7 +150,7 @@ class DAQImageApp:
             self.is_live = True
             self.live_btn.config(text="⏹ Stop Live View")
             self.current_img = np.zeros((self.PIXELS, self.PIXELS))
-            self.live_ptr = 0 # Reset continuous stream pointer
+            self.live_ptr = 0 
             self.serial_conn.reset_input_buffer()
             self.send_command(b'L')
             self.poll_live_data()
@@ -168,17 +169,14 @@ class DAQImageApp:
                 data_array = np.frombuffer(raw_data, dtype=np.uint8)
                 n_bytes = len(data_array)
                 
-                # Flatten image for 1D high-speed injection
                 flat_img = self.current_img.ravel()
                 
-                # Slicing logic to handle wraparound perfectly
                 if self.live_ptr + n_bytes > self.TOTAL_PIXELS:
                     space_left = self.TOTAL_PIXELS - self.live_ptr
                     flat_img[self.live_ptr:] = data_array[:space_left]
                     
                     remaining = n_bytes - space_left
                     if remaining >= self.TOTAL_PIXELS:
-                        # Safety net if the buffer gets severely backed up
                         data_array = data_array[-self.TOTAL_PIXELS:]
                         remaining = self.TOTAL_PIXELS
                         
@@ -188,14 +186,12 @@ class DAQImageApp:
                     flat_img[self.live_ptr : self.live_ptr + n_bytes] = data_array
                     self.live_ptr += n_bytes
                 
-                # Snap back to 2D
                 self.current_img = flat_img.reshape((self.PIXELS, self.PIXELS))
                 self.update_image_plot()
                 
         except Exception as e:
             print(f"Serial read error: {e}")
 
-        # Re-poll every 30ms 
         self.root.after(30, self.poll_live_data)
 
     def collect_data(self):
