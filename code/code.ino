@@ -1,6 +1,6 @@
 // Pin definitions - check with custom shield.
-const int DAC_X = DAC0; // Fast axis
-const int DAC_Y = DAC1; // Slow axis
+const int DAC_X = DAC1; // Fast axis
+const int DAC_Y = DAC0; // Slow axis
 const int ADC_Z = A0;   // Photosensor input
 
 // Scanning parameters
@@ -89,6 +89,9 @@ void collectData() {
   for (int y = 0; y < PIXELS; y++) {
     analogWrite(DAC_Y, getDacVal(y, PIXELS));
     
+    analogWrite(DAC_X, getDacVal(0, PIXELS)); // Snap mirror back to start
+    delay(2); // Wait 2ms for mirror to physically settle
+    
     for (int x = 0; x < PIXELS; x++) {
       analogWrite(DAC_X, getDacVal(x, PIXELS));
       delayMicroseconds(DELAY_US);
@@ -116,6 +119,10 @@ void transferData() {
 void liveScan() {
   for (int y = 0; y < PIXELS; y++) {
     analogWrite(DAC_Y, getDacVal(y, PIXELS));
+    
+    analogWrite(DAC_X, getDacVal(0, PIXELS)); 
+    delay(2); // Flyback
+    
     uint8_t rowBuf[PIXELS]; 
     
     for (int x = 0; x < PIXELS; x++) {
@@ -147,7 +154,7 @@ void demoScanY() {
   for (int y = 0; y < PIXELS; y++) {
     if (SerialUSB.available() > 0) return; 
     analogWrite(DAC_Y, getDacVal(y, PIXELS));
-    delayMicroseconds(DELAY_US * 2); 
+    delayMicroseconds(100*DELAY_US); 
   }
 }
 
@@ -169,7 +176,8 @@ void demoFastScanXY() {
     for (int x = 0; x < FAST_PIXELS; x++) {
       if (SerialUSB.available() > 0) return; 
       analogWrite(DAC_X, getDacVal(x, FAST_PIXELS));
-      delayMicroseconds(10);
+      delayMicroseconds(20);
     }
+    delayMicroseconds(1000);
   }
 }

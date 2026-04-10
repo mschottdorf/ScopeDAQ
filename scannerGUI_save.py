@@ -53,8 +53,8 @@ class DAQImageApp:
         demo_frame.pack(fill='x', pady=5)
         ttk.Button(demo_frame, text="Scan X", command=lambda: self.send_command(b'X')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Scan Y", command=lambda: self.send_command(b'Y')).pack(fill='x', pady=2, padx=5)
-        ttk.Button(demo_frame, text="Scan X + Y (128x128)", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
-        ttk.Button(demo_frame, text="Fast Scan X+Y (50x50)", command=lambda: self.send_command(b'F')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Slow X+Y (128x128)", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Fast X+Y (50x50)", command=lambda: self.send_command(b'F')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Stop Motion", command=lambda: self.send_command(b'H')).pack(fill='x', pady=2, padx=5)
 
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
@@ -195,6 +195,8 @@ class DAQImageApp:
         self.root.after(30, self.poll_live_data)
 
     def collect_data(self):
+        if self.serial_conn:
+            self.serial_conn.reset_input_buffer()
         self.send_command(b'C')
         print("Data collection started on Arduino...")
 
@@ -202,6 +204,9 @@ class DAQImageApp:
         if self.is_live:
             messagebox.showinfo("Stop Live View", "Please stop Live View before transferring a static frame.")
             return
+            
+        if self.serial_conn:
+            self.serial_conn.reset_input_buffer()
             
         self.send_command(b'S')
         raw_bytes = self.serial_conn.read(self.TOTAL_BYTES)
