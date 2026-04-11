@@ -188,14 +188,14 @@ void demoFastScanXY() {
       for (int x = 0; x < FAST_PIXELS; x++) {
         if (SerialUSB.available() > 0) return; 
         analogWrite(DAC_X, dacLut[x]);
-        delayMicroseconds(20);
+        delayMicroseconds(5);
       }
     } else {
       // Odd row: Scan Right to Left (Zig-Zag)
       for (int x = FAST_PIXELS - 1; x >= 0; x--) {
         if (SerialUSB.available() > 0) return; 
         analogWrite(DAC_X, dacLut[x]);
-        delayMicroseconds(20);
+        delayMicroseconds(5);
       }
     }
   }
