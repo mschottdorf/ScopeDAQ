@@ -169,15 +169,34 @@ void demoScanXY() {
   }
 }
 
-// High-Speed 50x50 Scan for oscilloscope. Minimum delay
+// High-Speed Scan for oscilloscope. Zig-zag pattern and LUT optimization.
 void demoFastScanXY() {
+  // 1. Create a Look-Up Table (LUT) for the DAC values.
+  // Gemini advise: This prevents doing heavy math (map, multiply, divide) inside the fast inner loop.
+  int dacLut[FAST_PIXELS];
+  for (int i = 0; i < FAST_PIXELS; i++) {
+    dacLut[i] = getDacVal(i, FAST_PIXELS);
+  }
+
+  // Then execute the Zig-Zag Scan
   for (int y = 0; y < FAST_PIXELS; y++) {
-    analogWrite(DAC_Y, getDacVal(y, FAST_PIXELS)); // Stretch 50 pixels across FOV
-    for (int x = 0; x < FAST_PIXELS; x++) {
-      if (SerialUSB.available() > 0) return; 
-      analogWrite(DAC_X, getDacVal(x, FAST_PIXELS));
-      delayMicroseconds(20);
+    analogWrite(DAC_Y, dacLut[y]); // Step the slow axis
+    
+    // Check if the row is even or odd to determine scan direction
+    if (y % 2 == 0) {
+      // Even row: Scan Left to Right
+      for (int x = 0; x < FAST_PIXELS; x++) {
+        if (SerialUSB.available() > 0) return; 
+        analogWrite(DAC_X, dacLut[x]);
+        delayMicroseconds(20);
+      }
+    } else {
+      // Odd row: Scan Right to Left (Zig-Zag)
+      for (int x = FAST_PIXELS - 1; x >= 0; x--) {
+        if (SerialUSB.available() > 0) return; 
+        analogWrite(DAC_X, dacLut[x]);
+        delayMicroseconds(20);
+      }
     }
-    delayMicroseconds(1000);
   }
 }

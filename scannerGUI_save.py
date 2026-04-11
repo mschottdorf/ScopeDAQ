@@ -54,7 +54,7 @@ class DAQImageApp:
         ttk.Button(demo_frame, text="Scan X", command=lambda: self.send_command(b'X')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Scan Y", command=lambda: self.send_command(b'Y')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Slow X+Y (128x128)", command=lambda: self.send_command(b'B')).pack(fill='x', pady=2, padx=5)
-        ttk.Button(demo_frame, text="Fast X+Y (50x50)", command=lambda: self.send_command(b'F')).pack(fill='x', pady=2, padx=5)
+        ttk.Button(demo_frame, text="Fast X+Y (Tek mode)", command=lambda: self.send_command(b'F')).pack(fill='x', pady=2, padx=5)
         ttk.Button(demo_frame, text="Stop Motion", command=lambda: self.send_command(b'H')).pack(fill='x', pady=2, padx=5)
 
         ttk.Separator(ctrl_frame, orient='horizontal').pack(fill='x', pady=10)
