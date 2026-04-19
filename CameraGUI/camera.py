@@ -21,16 +21,24 @@ class CameraGUI(QMainWindow):
         
         # Camera State Variables
         self.vmb = VmbSystem.get_instance()
-        # Note: we enter the VmbSystem context in the main block or here
         self.vmb.__enter__() 
         self.cam = None
         self.ram_stack = None
         self.frames_acquired = 0
         self.target_frames = 0
         self.is_live = False  
+        
+        # --- NEW: Thread Decoupling Variables ---
+        self.live_frame = None
+        self.live_timer = QTimer()
+        self.live_timer.timeout.connect(self.render_live_frame)
+        self.live_timer.setInterval(33)  # Pull frames at ~30 FPS (33ms)
+        
+        # Plotting Variables
         self.im = None
         self.cbar = None
         self.last_img = None  
+        self.hist_stairs = None # --- NEW: Fast histogram updating ---
         
         self.init_ui()
         self.refresh_cameras()
@@ -249,13 +257,11 @@ class CameraGUI(QMainWindow):
         if self.im is None:
             self.im = self.ax_img.imshow(img_array, cmap='inferno', vmin=vmin, vmax=vmax)
             self.cbar = self.figure.colorbar(self.im, ax=self.ax_img, fraction=0.046, pad=0.04)
-            # Match sliders to data on first grab
             img_min, img_max = int(np.min(img_array)), int(np.max(img_array))
             self.vmin_slider.setValue(img_min)
             self.vmax_slider.setValue(img_max)
         else:
             self.im.set_data(img_array)
-            # Update the colorbar limits for live frames
             self.im.set_clim(vmin=vmin, vmax=vmax)
 
         self.refresh_display()
@@ -268,22 +274,40 @@ class CameraGUI(QMainWindow):
         
         if self.im is not None:
             self.im.set_clim(vmin=vmin, vmax=vmax)
-            # Force colorbar update
-            self.cbar.update_normal(self.im)
 
-        self.ax_hist.clear()
+        # --- NEW: Fast Histogram Generation ---
         max_val = 255 if self.last_img.dtype == np.uint8 else 4095
         bin_w = self.bin_width_spin.value()
         bins = np.arange(0, max_val + bin_w + 1, bin_w)
-        self.ax_hist.hist(self.last_img.ravel(), bins=bins, color='gray', alpha=0.7)
-        self.ax_hist.set_xlim(0, max_val)
+        
+        # Use numpy for math (much faster than matplotlib hist)
+        counts, edges = np.histogram(self.last_img.ravel(), bins=bins)
+        
+        # Initialize stairs on first run, otherwise just update data
+        if self.hist_stairs is None:
+            self.ax_hist.clear()
+            self.hist_stairs = self.ax_hist.stairs(counts, edges, fill=True, color='gray', alpha=0.7)
+            self.ax_hist.set_xlim(0, max_val)
+        else:
+            self.hist_stairs.set_data(counts, edges)
+            # Dynamically adjust Y axis to prevent clipping
+            if counts.max() > 0:
+                self.ax_hist.set_ylim(0, counts.max() * 1.1)
+
         self.canvas.draw_idle()
+
+    # --- NEW: QTimer rendering method on Main Thread ---
+    def render_live_frame(self):
+        if self.live_frame is not None:
+            self.update_plot(self.live_frame)
+            self.live_frame = None  # Consume the frame
 
     def async_handler(self, cam: Camera, stream, frame):
         if frame.get_status() == FrameStatus.Complete:
             img = frame.as_numpy_ndarray().copy().squeeze()
             if self.is_live:
-                self.update_plot(img)
+                # --- MODIFIED: Instantly pass to main thread, don't plot here ---
+                self.live_frame = img 
             elif self.frames_acquired < self.target_frames:
                 self.ram_stack[self.frames_acquired] = img
                 self.frames_acquired += 1
@@ -297,9 +321,11 @@ class CameraGUI(QMainWindow):
             self.live_btn.setStyleSheet("background-color: #e74c3c; color: white;")
             self.fast_grab_btn.setEnabled(False)
             self.apply_btn.setEnabled(False)
+            self.live_timer.start() # Start UI poller
             self.cam.start_streaming(handler=self.async_handler, buffer_count=5)
         else:
             self.is_live = False
+            self.live_timer.stop() # Stop UI poller
             self.live_btn.setText("Start Live View")
             self.live_btn.setStyleSheet("")
             try:
@@ -387,15 +413,12 @@ class CameraGUI(QMainWindow):
             if frame.get_status() == FrameStatus.Complete:
                 img_array = frame.as_numpy_ndarray().copy().squeeze()
                 
-                # --- NEW: Auto-adjust colorbar and linked GUI sliders ---
                 img_min = int(np.min(img_array))
                 img_max = int(np.max(img_array))
                 
-                # Prevent identical min/max to avoid matplotlib colorbar zero-division errors
                 if img_min >= img_max:
                     img_max = img_min + 1
                 
-                # Block signals temporarily to prevent premature UI redraws
                 self.vmin_slider.blockSignals(True)
                 self.vmax_slider.blockSignals(True)
                 
@@ -404,13 +427,11 @@ class CameraGUI(QMainWindow):
                 
                 self.vmin_slider.blockSignals(False)
                 self.vmax_slider.blockSignals(False)
-                # --------------------------------------------------------
                 
                 self.update_plot(img_array)
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
         
     def update_fps_estimate(self):
-        """Calculates and updates the FPS label based on current camera state."""
         if not self.cam:
             return
             
@@ -423,10 +444,8 @@ class CameraGUI(QMainWindow):
             
             frame_size_bytes = actual_w * actual_h * bytes_per_pixel
             
-            # 115 MB/s is a safe estimate for GigE overhead
             bandwidth_limit_fps = 380_000_000 / frame_size_bytes if frame_size_bytes > 0 else 999
             
-            # FPS is also limited by the exposure time (1000ms / exposure_ms)
             try:
                 exposure_ms = float(self.exp_input.text())
                 exposure_limit_fps = 1000.0 / exposure_ms if exposure_ms > 0 else 999
@@ -440,12 +459,10 @@ class CameraGUI(QMainWindow):
             self.fps_label.setText("Estimated Max FPS: Error calculating")
             
     def save_stack(self):
-        # 1. Safety check: ensure there is actually data to save
         if self.ram_stack is None or self.frames_acquired == 0:
             QMessageBox.warning(self, "No Data", "There are no frames in RAM to save.")
             return
 
-        # 2. Open file dialog to choose save location
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getSaveFileName(
             self, 
@@ -455,25 +472,18 @@ class CameraGUI(QMainWindow):
             options=options
         )
 
-        # 3. If the user cancels the dialog, just return
         if not file_path:
             return
 
-        # Ensure a proper file extension
         if not (file_path.lower().endswith('.tif') or file_path.lower().endswith('.tiff')):
             file_path += '.tiff'
 
         try:
-            # Prevent the user from clicking save again while it's writing to disk
             self.save_btn.setEnabled(False)
             self.save_btn.setText("Saving...")
-            QApplication.processEvents() # Force UI to update the button text
+            QApplication.processEvents() 
 
-            # 4. Slice the array to only save acquired frames 
-            # (crucial if they stopped the fast grab early)
             stack_to_save = self.ram_stack[:self.frames_acquired]
-
-            # 5. Write the multi-page TIFF
             tifffile.imwrite(file_path, stack_to_save, photometric='minisblack')
 
             QMessageBox.information(
@@ -486,12 +496,10 @@ class CameraGUI(QMainWindow):
             QMessageBox.critical(self, "Error Saving File", str(e))
             
         finally:
-            # Restore button state
             self.save_btn.setText("Save RAM Stack")
             self.save_btn.setEnabled(True)
 
     def closeEvent(self, event):
-        """Graceful termination to avoid Segmentation Fault."""
         self.is_live = False
         if self.cam:
             try:
