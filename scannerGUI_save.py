@@ -81,12 +81,22 @@ class DAQImageApp:
         self.zoom = tk.IntVar(value=100)
         self.contrast = tk.DoubleVar(value=1.0)
         self.brightness = tk.DoubleVar(value=0.0)
+        self.flip_lr = tk.BooleanVar(value=False)
+        self.flip_tb = tk.BooleanVar(value=False)
         
         self.create_slider(adj_frame, "Zoom (%):", self.zoom, 1, 100, command=self.update_zoom)
         ttk.Separator(adj_frame, orient='horizontal').pack(fill='x', pady=10, padx=5)
         self.create_slider(adj_frame, "Contrast:", self.contrast, 0.1, 5.0, resolution=0.1, command=self.update_image_plot)
         self.create_slider(adj_frame, "Brightness:", self.brightness, -128, 128, command=self.update_image_plot)
         
+        ttk.Separator(adj_frame, orient='horizontal').pack(fill='x', pady=10, padx=5)
+        
+        # --- Flip Controls ---
+        flip_frame = ttk.Frame(adj_frame)
+        flip_frame.pack(fill='x', pady=2, padx=5)
+        ttk.Checkbutton(flip_frame, text="Flip Left/Right", variable=self.flip_lr, command=self.update_image_plot).pack(side=tk.LEFT, expand=True)
+        ttk.Checkbutton(flip_frame, text="Flip Top/Bottom", variable=self.flip_tb, command=self.update_image_plot).pack(side=tk.LEFT, expand=True)
+
         ttk.Label(ctrl_frame, text="Press F11 for Fullscreen", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.BOTTOM, pady=10)
 
         # --- Image Display ---
@@ -138,7 +148,7 @@ class DAQImageApp:
         
     def update_zoom(self):
         if self.serial_conn:
-            val = int(self.zoom.get())
+            val = int(0.6*self.zoom.get())
             self.serial_conn.write(b'Z' + bytes([val]))
 
     def toggle_live(self):
@@ -232,6 +242,12 @@ class DAQImageApp:
         c, b = self.contrast.get(), self.brightness.get()
         img_final = c * (self.current_img - 128) + 128 + b
         img_final = np.clip(img_final, 0, 255).astype(np.uint8)
+
+        # Apply spatial flips based on checkbox states
+        if self.flip_lr.get():
+            img_final = np.fliplr(img_final)
+        if self.flip_tb.get():
+            img_final = np.flipud(img_final)
 
         if self.im_obj is None:
             self.ax.clear()

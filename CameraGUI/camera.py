@@ -27,8 +27,7 @@ class CameraGUI(QMainWindow):
         self.frames_acquired = 0
         self.target_frames = 0
         self.is_live = False  
-        
-        # --- NEW: Thread Decoupling Variables ---
+        self.ram_timestamps = None  #Array to hold timestamps        
         self.live_frame = None
         self.live_timer = QTimer()
         self.live_timer.timeout.connect(self.render_live_frame)
@@ -275,7 +274,6 @@ class CameraGUI(QMainWindow):
         if self.im is not None:
             self.im.set_clim(vmin=vmin, vmax=vmax)
 
-        # --- NEW: Fast Histogram Generation ---
         max_val = 255 if self.last_img.dtype == np.uint8 else 4095
         bin_w = self.bin_width_spin.value()
         bins = np.arange(0, max_val + bin_w + 1, bin_w)
@@ -296,7 +294,6 @@ class CameraGUI(QMainWindow):
 
         self.canvas.draw_idle()
 
-    # --- NEW: QTimer rendering method on Main Thread ---
     def render_live_frame(self):
         if self.live_frame is not None:
             self.update_plot(self.live_frame)
@@ -306,9 +303,11 @@ class CameraGUI(QMainWindow):
         if frame.get_status() == FrameStatus.Complete:
             img = frame.as_numpy_ndarray().copy().squeeze()
             if self.is_live:
-                # --- MODIFIED: Instantly pass to main thread, don't plot here ---
                 self.live_frame = img 
             elif self.frames_acquired < self.target_frames:
+                self.ram_timestamps[self.frames_acquired] = time.perf_counter()                
+                # If you want the camera's internal hardware timestamp instead,
+                # you can use: self.ram_timestamps[self.frames_acquired] = frame.get_timestamp()
                 self.ram_stack[self.frames_acquired] = img
                 self.frames_acquired += 1
         cam.queue_frame(frame)
@@ -390,15 +389,21 @@ class CameraGUI(QMainWindow):
             w, h = self.cam.get_feature_by_name("Width").get(), self.cam.get_feature_by_name("Height").get()
             fmt = str(self.cam.get_feature_by_name("PixelFormat").get())
             dtype = np.uint8 if "8" in fmt else np.uint16
+            
             self.ram_stack = np.empty((self.target_frames, h, w), dtype=dtype)
+            self.ram_timestamps = np.empty((self.target_frames,), dtype=np.float64) # NEW
+            
             self.frames_acquired = 0
             self.progress_bar.setMaximum(self.target_frames)
+            
+            # Start stream
             self.cam.start_streaming(handler=self.async_handler, buffer_count=20)
             while self.frames_acquired < self.target_frames:
                 self.progress_bar.setValue(self.frames_acquired)
                 QApplication.processEvents()
                 time.sleep(0.01)
             self.cam.stop_streaming()
+            
             if self.frames_acquired > 0:
                 self.ax_first.imshow(self.ram_stack[0], cmap='inferno')
                 self.ax_last.imshow(self.ram_stack[self.frames_acquired - 1], cmap='inferno')
@@ -483,13 +488,26 @@ class CameraGUI(QMainWindow):
             self.save_btn.setText("Saving...")
             QApplication.processEvents() 
 
+            # Slice arrays to only save the frames actually acquired
             stack_to_save = self.ram_stack[:self.frames_acquired]
-            tifffile.imwrite(file_path, stack_to_save, photometric='minisblack')
+            timestamps_to_save = self.ram_timestamps[:self.frames_acquired]
+
+            # 1. Save TIFF and embed timestamps in the metadata header
+            tifffile.imwrite(
+                file_path, 
+                stack_to_save, 
+                photometric='minisblack',
+                metadata={'Timestamps': timestamps_to_save.tolist()} 
+            )
+
+            # 2. Save a companion CSV file with the timestamps for easy analysis
+            csv_path = file_path.rsplit('.', 1)[0] + "_timestamps.csv"
+            np.savetxt(csv_path, timestamps_to_save, delimiter=",", header="Timestamp", comments="")
 
             QMessageBox.information(
                 self, 
                 "Success", 
-                f"Successfully saved {self.frames_acquired} frames to:\n{file_path}"
+                f"Successfully saved {self.frames_acquired} frames to:\n{file_path}\nand timestamps to CSV."
             )
 
         except Exception as e:
@@ -498,7 +516,7 @@ class CameraGUI(QMainWindow):
         finally:
             self.save_btn.setText("Save RAM Stack")
             self.save_btn.setEnabled(True)
-
+            
     def closeEvent(self, event):
         self.is_live = False
         if self.cam:
