@@ -31,7 +31,10 @@ void setup() {
 // Helper function to calculate scaled DAC value around the center (2048)
 int getDacVal(int idx, int max_pixels) {
   long raw = map(idx, 0, max_pixels - 1, 0, 4095);
-  return 2048 + ((raw - 2048) * zoomPercent) / 100;
+  long dacVal = 2048 + ((raw - 2048) * zoomPercent) / 100;
+  
+  // Constrain the output to valid 12-bit DAC limits (0 to 4095) to prevent wrap-around
+  return constrain(dacVal, 0, 4095);
 }
 
 void loop() {
